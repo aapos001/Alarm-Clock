@@ -25,7 +25,7 @@
 
 enum DisplayTimeState {DTInit, DTDisplay, DTIdle, DTWaitHrB, DTHrSwap, DTToSA} displayTime_state;
 enum SetAlarmState {SAInit, SAIdle, SASetAla, SADisplay, SAHrInc, SAMinInc, SASaveAla, SAToDT} setAlarm_state;
-enum LEDPWMState {LPInit, LPOff, LPOn} LEDPWM_state;
+enum LEDPWMState {LPInit, LPOff, LPOn, LPReset} LEDPWM_state;
 
 /* admin variables
    These variables determine which SM is displayed */
@@ -40,8 +40,8 @@ uint8_t hr, min, sec, year, mnth, day, dt;
 uint8_t hrdec, mindec, yeardec, mnthdec, daydec, dtdec;
 
 // The set alarm
-uint8_t alarmSetHour = 0xFF;   
-uint8_t alarmSetMin = 0xFF; 
+uint8_t alarmSetHour = 0x0F;   
+uint8_t alarmSetMin = 0x0F; 
 unsigned char alarmSetAMPM = 0; 
 
 uint8_t alarmHour = 12;
@@ -67,7 +67,9 @@ void UpdateTime() {
 	yeardec = bcd2dec(year);
 	mnthdec = bcd2dec(mnth);
 	dtdec = bcd2dec(dt);
-	}	
+}
+
+	
 
 void DisplayTime_Init(){
 	
@@ -84,6 +86,8 @@ void SetAlarm_Init() {
 void LEDPWM_Init() {
 	
 	LEDPWM_state = LPInit;
+	TCCR0A = (1 << COM0A1 | 1 << WGM00 | 1 << WGM01); // Toggle OC0A on Compare Match Fast PWM
+	TCCR0B = (1 << CS00);	// No prescalar
 	
 }
 
@@ -219,16 +223,20 @@ void DisplayTime_Tick() {
 			if(hourMode == 0) { // 12 to 24
 				hourMode = 1;
 				ds3231_setHr(hourMode, hr);
+				/*
 				if(alarmSetHour > 12) {
 					alarmSetHour -= 12;
 				}
+				*/
 			}
 			else if(hourMode == 1) { 
 				hourMode = 0;
 				ds3231_setHr(hourMode, hr);
+				/*
 				if(alarmSetAMPM) {
 					alarmSetHour += 12;
 				}
+				*/
 			}
 		break;	
 		
@@ -394,8 +402,8 @@ void SetAlarm_Tick() {
 // Turns light on and off
 void LEDPWM_Tick() {
 	
-	uint8_t alarmCheck;
-	uint8_t hourSum;
+	unsigned int alarmCheck; // Convert alarm setting to minutes for easier alarm checking
+	unsigned int hourSum; // Convert current time to minutes to check against alarm
 	// Transitions
 	switch(LEDPWM_state) {
 		
@@ -404,35 +412,35 @@ void LEDPWM_Tick() {
 		break;
 		
 		case LPOff:
-			/*
-			alarmCheck = (alarmSetHour * 60) + alarmSetMin;
-			if((hourMode == 0) && (ampm == 1)) {
-				hourSum = (hrdec * 60) + mindec + 720;
+			if(hourMode == 0) { // 12 hour mode
+				if(alarmSetHour == 24 || ((ampm == 1) && (hrdec < 12))) { // Midnight time and after 1pm
+					hourSum = (hrdec * 60) + mindec + 720;
+				}
 			}
-			else {
-				hourSum = (hrdec * 60) + mindec;
-			}
-			if((hourSum - alarmCheck <= 10) && (hourSum - alarmCheck >= 0)) {
-				LEDPWM_state = LPOn;
-			}
-			*/
-			if((hourMode == 0) && (ampm == 1)) {
-				alarmCheck = ((alarmSetHour - 12) * 60) + alarmSetMin;
-			}
-			else {
-				alarmCheck = (alarmSetHour * 60) + alarmSetMin;	
-			}
-			hourSum = (hrdec * 60) + mindec;
-			if(((alarmCheck - hourSum) <= 10)) { // FIX FOR SWITCH BETWEEN 24 HR MODE
-				LEDPWM_state = LPOn;
+			else { // 24 hour mode
+				if(alarmSetHour == 24) { // At midnight
+					hourSum = mindec + 1440;
+				}
+				else {
+					hourSum = (hrdec * 60) + mindec;
+				}
 			}
 			
+			alarmCheck = (alarmSetHour * 60) + alarmSetMin;
+			if(((alarmCheck - hourSum) <= 10)) { // Turn "on" alarm 10 minutes before
+												// FIX FOR EDGE CASE ALARM AT MIDNIGHT
+				LEDPWM_state = LPOn;
+			}
 		break;
 		
 		case LPOn:
-			if(UP) {
-				LEDPWM_state = LPOff;				
+			if(UP) { // PLACEHOLDER FOR Bluetooth
+				LEDPWM_state = LPReset;				
 			}
+		break;
+		
+		case LPReset:
+			LEDPWM_state = LPOff;
 		break;
 		
 		default:
@@ -444,21 +452,26 @@ void LEDPWM_Tick() {
 	switch(LEDPWM_state) {
 		
 		case LPInit:
-			PORTB = 0x00;
 		break;
 		
 		case LPOff:
-			PORTB = 0x00;
 		break;
 		
 		case LPOn:
-			PORTB = 0xFF;
+			if(OCR0A < 255) { // LED gets to max brightness
+			OCR0A++;
+			}
+		break;
+		
+		case LPReset:
+			alarmSetHour = 0x0F;
+			alarmSetMin = 0x0F;
+			alarmSetAMPM = 0;
+			OCR0A = 0;
 		break;
 		
 		default:
-			PORTB = 0x00;
 		break;
-		
 	}
 }
 
@@ -502,7 +515,7 @@ int main(void) {
 	DDRB = 0xFF; PORTB = 0x00;
 	DDRD = 0xFF; PORTD = 0x00;
 	LCD_init();
-	ds3231_init();
+	ds3231_init();	
 	_delay_ms(100);
 	
 	/* hour, minute, second, am/pm, year, month, date, day */
@@ -512,6 +525,6 @@ int main(void) {
     StartSecPulse(1);
     //RunSchedular 
     vTaskStartScheduler(); 
-    
+	
 	return 0; 
 }	
