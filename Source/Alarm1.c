@@ -513,7 +513,9 @@ int main(void) {
 	
 	DDRA = 0x00; PORTA = 0xFF;
 	DDRB = 0xFF; PORTB = 0x00;
-	DDRD = 0xFF; PORTD = 0x00;
+	DDRD = 0xFE; PORTD = 0x01;
+	DDRC = 0xC0; PORTC = 0x3F;
+
 	LCD_init();
 	ds3231_init();	
 	_delay_ms(100);

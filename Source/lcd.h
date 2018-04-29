@@ -34,20 +34,23 @@ void delay_ms(int miliSec) { //for 8 Mhz crystal
 void transmit_data(unsigned char data) {
 	/* for each bit of data */
 	for(unsigned i = 0; i < 8; i++) {
-		PORTD |= 0x01; // Set SRCLR to 1 allowing data to be set
-		PORTD &= 0xFD; // Also clear SRCLK in preparation of sending data
-		if(data & 0x80) {
-			PORTD |= 0x08;
+		
+		/*PORTD0 -> PORTC7 PORTD1->PORTC6*/
+		
+		PORTC |= 0x80; // Set SRCLR to 1 allowing data to be set
+		PORTC &= 0xBF; // Also clear SRCLK in preparation of sending data
+		if(data & 0x80) { // Set SER = next bit of data to be sent
+			PORTD |= 0x08;	
 		}
 		else {
 			PORTD &= 0xF7;
-		}// set SER = next bit of data to be sent.
-		PORTD |= 0x02; // set SRCLK = 1. Rising edge shifts next bit of data into the shift register
+		}
+		PORTC |= 0x40; // Set SRCLK = 1. Rising edge shifts next bit of data into the shift register
 		data = data << 1;
 	}
-	/* end for each bit of data */
-	PORTD |= 0x04; // set RCLK = 1. Rising edge copies data from the "Shift" register to the "Storage" register
-	PORTD &= 0xE0;  // clears all lines in preparation of a new transmission
+	PORTD |= 0x04; // Set RCLK = 1. Rising edge copies data from the "Shift" register to the "Storage" register
+	PORTD &= 0xE3; // Clears all lines in preparation of a new transmission
+	PORTC &= 0x3F;
 }
 
 void LCD_WriteCommand (unsigned char Command) {
