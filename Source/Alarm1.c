@@ -12,6 +12,7 @@
 #include "lcd.h"
 #include "ds3231.h"
 #include "i2c_master.h"
+#include "usart_ATmega1284.h"
  
 //FreeRTOS include files 
 #include "FreeRTOS.h" 
@@ -26,6 +27,7 @@
 enum DisplayTimeState {DTInit, DTDisplay, DTIdle, DTWaitHrB, DTHrSwap, DTToSA} displayTime_state;
 enum SetAlarmState {SAInit, SAIdle, SASetAla, SADisplay, SAHrInc, SAMinInc, SASaveAla, SAToDT} setAlarm_state;
 enum LEDPWMState {LPInit, LPOff, LPOn, LPReset} LEDPWM_state;
+enum AlarmOnState {AOInit, AOCheck, AOSendFlag, AOWaitSignal, AOReset} alarmOn_state;
 
 /* admin variables
    These variables determine which SM is displayed */
@@ -49,6 +51,8 @@ uint8_t alarmMin = 0;
 unsigned char alarmAMPM = 1;
 
 unsigned char minTimer = 0; // Refreshes display every 60s
+
+unsigned char alarmOnFlag = 0; // If flag == 1, the alarm is on
 
 void UpdateTime() {
 	
@@ -89,6 +93,11 @@ void LEDPWM_Init() {
 	TCCR0A = (1 << COM0A1 | 1 << WGM00 | 1 << WGM01); // Toggle OC0A on Compare Match Fast PWM
 	TCCR0B = (1 << CS00);	// No prescalar
 	
+}
+
+void AlarmOn_Init() {
+	
+	alarmOn_state = AOInit;
 }
 
 /* Display the current time, day, and date
@@ -402,8 +411,6 @@ void SetAlarm_Tick() {
 // Turns light on and off
 void LEDPWM_Tick() {
 	
-	unsigned int alarmCheck; // Convert alarm setting to minutes for easier alarm checking
-	unsigned int hourSum; // Convert current time to minutes to check against alarm
 	// Transitions
 	switch(LEDPWM_state) {
 		
@@ -412,30 +419,25 @@ void LEDPWM_Tick() {
 		break;
 		
 		case LPOff:
-			if(hourMode == 0) { // 12 hour mode
-				if(alarmSetHour == 24 || ((ampm == 1) && (hrdec < 12))) { // Midnight time and after 1pm
-					hourSum = (hrdec * 60) + mindec + 720;
-				}
-			}
-			else { // 24 hour mode
-				if(alarmSetHour == 24) { // At midnight
-					hourSum = mindec + 1440;
-				}
-				else {
-					hourSum = (hrdec * 60) + mindec;
-				}
-			}
-			
-			alarmCheck = (alarmSetHour * 60) + alarmSetMin;
-			if(((alarmCheck - hourSum) <= 10)) { // Turn "on" alarm 10 minutes before
-												// FIX FOR EDGE CASE ALARM AT MIDNIGHT
+			if(alarmOnFlag) {
 				LEDPWM_state = LPOn;
+			}
+			else {
+				LEDPWM_state = LPOff;
 			}
 		break;
 		
 		case LPOn:
+			/*
 			if(UP) { // PLACEHOLDER FOR Bluetooth
 				LEDPWM_state = LPReset;				
+			}
+			*/
+			if(!alarmOnFlag) {
+				LEDPWM_state = LPReset;
+			}
+			else {
+				LEDPWM_state = LPOn;
 			}
 		break;
 		
@@ -464,9 +466,6 @@ void LEDPWM_Tick() {
 		break;
 		
 		case LPReset:
-			alarmSetHour = 0x0F;
-			alarmSetMin = 0x0F;
-			alarmSetAMPM = 0;
 			OCR0A = 0;
 		break;
 		
@@ -474,6 +473,99 @@ void LEDPWM_Tick() {
 		break;
 	}
 }
+
+void AlarmOn_Tick() {
+
+	unsigned int alarmCheck; // Convert alarm setting to minutes for easier alarm checking
+	unsigned int hourSum; // Convert current time to minutes to check against alarm	
+	unsigned char alarmOffSignal = 0; // If signal == 1, turn the alarm off
+	// Transitions
+	switch(alarmOn_state) {
+		
+		case AOInit:
+			alarmOn_state = AOCheck;
+		break;
+		
+		case AOCheck:
+			if((hourMode == 0) && (alarmSetHour == 24 || ((ampm == 1) && (hrdec < 12)))) { // 12 hour mode at midnight or after 1pm
+					hourSum = (hrdec * 60) + mindec + 720;
+			}
+			else if ((hourMode == 1) && (alarmSetHour == 24)){ // 24 hour mode at midnight
+					hourSum = mindec + 1440;
+			}
+			else {
+					hourSum = (hrdec * 60) + mindec;
+			}
+			alarmCheck = (alarmSetHour * 60) + alarmSetMin;
+			if(((alarmCheck - hourSum) <= 10)) { // Turn "on" alarm 10 minutes before
+				// FIX FOR EDGE CASE ALARM AT MIDNIGHT
+				alarmOnFlag = 1;
+				alarmOn_state = AOSendFlag;
+			}		
+		break;
+		
+		case AOSendFlag:
+			if(USART_HasTransmitted(0)) {
+				alarmOn_state = AOWaitSignal;
+			}
+			else {
+				alarmOn_state = AOSendFlag;
+			}
+		break;
+		
+		case AOWaitSignal:
+			if(USART_HasReceived(0)) {
+				alarmOffSignal = USART_Receive(0);
+				USART_Flush(0);
+			}
+			if(alarmOffSignal) {
+				alarmOn_state = AOReset;
+			}
+			else {
+				alarmOn_state = AOWaitSignal;
+			}
+		break;
+		
+		case AOReset:
+			alarmOn_state = AOCheck;
+		break;
+		
+		default:
+			alarmOn_state = AOInit;
+		break;
+	}
+	
+	// Actions
+	switch(alarmOn_state) {
+		
+		case AOInit:
+		break;
+		
+		case AOCheck:
+		break;
+		
+		case AOSendFlag:
+			if(USART_IsSendReady(0)) {
+				USART_Send(0x01, 0);
+			}
+		break;
+		
+		case AOWaitSignal:
+		break;
+		
+		case AOReset:
+			alarmSetHour = 0x0F;
+			alarmSetMin = 0x0F;
+			alarmSetAMPM = 0;
+			alarmOnFlag = 0;
+			alarmOffSignal = 0;		
+		break;
+		
+		default:
+		break;
+	}
+}
+
 
 void DisplayTimeTask() {
 	
@@ -502,11 +594,21 @@ void LEDPWMTask() {
 	}
 }
 
+void AlarmOnTask() {
+	
+	AlarmOn_Init();
+	for(;;) {
+		AlarmOn_Tick();
+		vTaskDelay(1000);
+	}	
+}
+
 void StartSecPulse(unsigned portBASE_TYPE Priority) {
 	
 	xTaskCreate(DisplayTimeTask, (signed portCHAR *)"DisplayTimeTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 	xTaskCreate(SetAlarmTask, (signed portCHAR *)"SetAlarmTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 	xTaskCreate(LEDPWMTask, (signed portCHAR *)"LEDPWMTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);	
+	xTaskCreate(AlarmOnTask, (signed portCHAR *)"AlarmOnTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 }
 
 int main(void) {
@@ -519,6 +621,8 @@ int main(void) {
 	LCD_init();
 	ds3231_init();	
 	_delay_ms(100);
+	initUSART(0);
+	USART_Flush(0);
 	
 	/* hour, minute, second, am/pm, year, month, date, day */
 	//ds3231_set(0x12, 0x29, 0x00, 0x01, 0x18, 0x04, 0x23, 0x02);
