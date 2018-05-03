@@ -28,6 +28,7 @@ enum DisplayTimeState {DTInit, DTDisplay, DTIdle, DTWaitHrB, DTHrSwap, DTToSA} d
 enum SetAlarmState {SAInit, SAIdle, SASetAla, SADisplay, SAHrInc, SAMinInc, SASaveAla, SAToDT} setAlarm_state;
 enum LEDPWMState {LPInit, LPOff, LPOn, LPReset} LEDPWM_state;
 enum AlarmOnState {AOInit, AOCheck, AOSendFlag, AOWaitSignal, AOReset} alarmOn_state;
+enum SpeakerOnState {SInit, SOff, SOn, SReset} speakerOn_state;
 
 /* admin variables
    These variables determine which SM is displayed */
@@ -53,6 +54,8 @@ unsigned char alarmAMPM = 1;
 unsigned char minTimer = 0; // Refreshes display every 60s
 
 unsigned char alarmOnFlag = 0; // If flag == 1, the alarm is on
+unsigned int alarmCheck; // Convert alarm setting to minutes for easier alarm checking
+unsigned int hourSum; // Convert current time to minutes to check against alarm
 
 void UpdateTime() {
 	
@@ -73,7 +76,31 @@ void UpdateTime() {
 	dtdec = bcd2dec(dt);
 }
 
+void set_PWM(double frequency) {
 	
+	// Keeps track of the currently set frequency
+	// Will only update the registers when the frequency
+	// changes, plays music uninterrupted.
+	static double current_frequency;
+	if (frequency != current_frequency) {
+
+		if (!frequency) TCCR3B &= 0x08; //stops timer/counter
+		else TCCR3B |= 0x03; // resumes/continues timer/counter
+		
+		// prevents OCR3A from overflowing, using prescaler 64
+		// 0.954 is smallest frequency that will not result in overflow
+		if (frequency < 0.954) OCR3A = 0xFFFF;
+		
+		// prevents OCR3A from underflowing, using prescaler 64					// 31250 is largest frequency that will not result in underflow
+		else if (frequency > 31250) OCR3A = 0x0000;
+		
+		// set OCR3A based on desired frequency
+		else OCR3A = (short)(8000000 / (128 * frequency)) - 1;
+
+		TCNT3 = 0; // resets counter
+		current_frequency = frequency;
+	}
+}	
 
 void DisplayTime_Init(){
 	
@@ -98,6 +125,17 @@ void LEDPWM_Init() {
 void AlarmOn_Init() {
 	
 	alarmOn_state = AOInit;
+}
+
+void SpeakerOn_Init() {
+	
+	speakerOn_state = SInit;
+	TCCR3A = (1 << COM3A0);
+	// COM3A0: Toggle PB6 on compare match between counter and OCR3A
+	TCCR3B = (1 << WGM32) | (1 << CS31) | (1 << CS30);
+	// WGM32: When counter (TCNT3) matches OCR3A, reset counter
+	// CS31 & CS30: Set a prescaler of 64
+	set_PWM(0);
 }
 
 /* Display the current time, day, and date
@@ -428,11 +466,6 @@ void LEDPWM_Tick() {
 		break;
 		
 		case LPOn:
-			/*
-			if(UP) { // PLACEHOLDER FOR Bluetooth
-				LEDPWM_state = LPReset;				
-			}
-			*/
 			if(!alarmOnFlag) {
 				LEDPWM_state = LPReset;
 			}
@@ -463,10 +496,12 @@ void LEDPWM_Tick() {
 			if(OCR0A < 255) { // LED gets to max brightness
 			OCR0A++;
 			}
+			PORTB |= 0x20;
 		break;
 		
 		case LPReset:
 			OCR0A = 0;
+			PORTB &= 0xDF;
 		break;
 		
 		default:
@@ -476,8 +511,6 @@ void LEDPWM_Tick() {
 
 void AlarmOn_Tick() {
 
-	unsigned int alarmCheck; // Convert alarm setting to minutes for easier alarm checking
-	unsigned int hourSum; // Convert current time to minutes to check against alarm	
 	unsigned char alarmOffSignal = 0; // If signal == 1, turn the alarm off
 	// Transitions
 	switch(alarmOn_state) {
@@ -566,6 +599,77 @@ void AlarmOn_Tick() {
 	}
 }
 
+void SpeakerOn_Tick() {
+	
+	// Transitions
+	switch(speakerOn_state) {
+		
+		case SInit:
+			speakerOn_state = SOff;
+		break;
+		
+		case SOff:
+			if((hourMode == 0) && (alarmSetHour == 24 || ((ampm == 1) && (hrdec < 12)))) { // 12 hour mode at midnight or after 1pm
+				hourSum = (hrdec * 60) + mindec + 720;
+			}
+			else if ((hourMode == 1) && (alarmSetHour == 24)){ // 24 hour mode at midnight
+				hourSum = mindec + 1440;
+			}
+			else {
+				hourSum = (hrdec * 60) + mindec;
+			}
+			alarmCheck = (alarmSetHour * 60) + alarmSetMin;
+			if(alarmCheck == hourSum) { // Turn "on" alarm on alarm time
+				speakerOn_state = SOn;
+			}
+			else {
+				speakerOn_state = SOff;
+			}
+		break;
+		
+		case SOn:
+			if(!alarmOnFlag) {
+				speakerOn_state = SOff;
+			}
+			else {
+				speakerOn_state = SOn;
+			}
+		break;
+		
+		case SReset:
+			speakerOn_state = SOff;
+		break;
+		
+		default:
+			speakerOn_state = SInit;
+		break;
+		
+	}
+		
+	// Actions
+	switch(speakerOn_state) {
+	
+		case SInit:
+			set_PWM(0);
+		break;
+		
+		case SOff:
+			set_PWM(0);
+		break;
+		
+		case SOn:
+			set_PWM(293.66);
+		break;
+		
+		case SReset:
+			set_PWM(0);
+		break;	
+		
+		default:
+			set_PWM(0);
+		break;
+	}
+}
 
 void DisplayTimeTask() {
 	
@@ -603,12 +707,22 @@ void AlarmOnTask() {
 	}	
 }
 
+void SpeakerOnTask() {
+	
+	SpeakerOn_Init();
+	for(;;) {
+		SpeakerOn_Tick();
+		vTaskDelay(1000);
+	}	
+}
+
 void StartSecPulse(unsigned portBASE_TYPE Priority) {
 	
 	xTaskCreate(DisplayTimeTask, (signed portCHAR *)"DisplayTimeTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 	xTaskCreate(SetAlarmTask, (signed portCHAR *)"SetAlarmTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 	xTaskCreate(LEDPWMTask, (signed portCHAR *)"LEDPWMTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);	
 	xTaskCreate(AlarmOnTask, (signed portCHAR *)"AlarmOnTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
+	xTaskCreate(SpeakerOnTask, (signed portCHAR *)"SpeakerOnTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 }
 
 int main(void) {
