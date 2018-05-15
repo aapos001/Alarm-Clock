@@ -12,6 +12,8 @@ https://github.com/g4lvanix/I2C-master-lib
 DS3231 Library
 http://www.instructables.com/id/Clock-Calender-Using-DS3231GLCDAtmega32/
 
-LCD and USART
+LCD and USART Libraries
 CS120B
 
+Alarm1.c and main.c 
+CS179J
