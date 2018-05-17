@@ -12,6 +12,7 @@ https://github.com/g4lvanix/I2C-master-lib
 DS3231 Library 
 
 ds3231_set, ds3231_get http://www.instructables.com/id/Clock-Calender-Using-DS3231GLCDAtmega32/
+
 dec2bcd, bcd2dec, ds3231_init, ds3231_setHr, ds3231_getT CS179J
 
 USART Library
