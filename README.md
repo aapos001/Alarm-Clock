@@ -4,10 +4,10 @@ An alarm clock that has a slowly brightening light, aromatherapy, and a weight s
 # References
 
 FreeRTOS
-https://www.freertos.org/RTOS.html
+    https://www.freertos.org/RTOS.html
 
 I2C Library
-https://github.com/g4lvanix/I2C-master-lib
+    https://github.com/g4lvanix/I2C-master-lib
 
 DS3231 Library 
 
@@ -15,7 +15,7 @@ DS3231 Library
     ds3231_set, ds3231_get http://www.instructables.com/id/Clock-Calender-Using-DS3231GLCDAtmega32/
 
 USART Library
-CS120B
+    CS120B
 
 LCD Library 
 
@@ -23,4 +23,4 @@ LCD Library
     everything else CS120B
 
 Alarm1.c and main.c 
-CS179J
+    CS179J
