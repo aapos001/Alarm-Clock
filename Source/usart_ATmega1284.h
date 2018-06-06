@@ -6,7 +6,8 @@
 
 // USART Setup Values
 #define F_CPU 8000000UL // Assume uC operates at 8MHz
-#define BAUD_RATE 9600
+//#define BAUD_RATE 9600
+#define BAUD_RATE 115200
 #define BAUD_PRESCALE (((F_CPU / (BAUD_RATE * 16UL))) - 1)
 
 ////////////////////////////////////////////////////////////////////////////////

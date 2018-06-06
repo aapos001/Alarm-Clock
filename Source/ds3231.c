@@ -159,3 +159,23 @@ void ds3231_getT(uint8_t *temp) {
 	i2c_stop();
 		
 }
+
+void ds3231_setTime(uint8_t hr,uint8_t min,uint8_t sec,uint8_t ampm, unsigned char hourMode) {
+	
+	if(hourMode == 0) { // 12 hour mode
+		hr &= 0x1F; // clear first 3 bits which are ampm, 24 hour bits
+		hr |= 0x40; // standard is AMPM, D6 = 1, D5 = 0
+		hr |= (ampm<<5); // 1 = PM 0 = AM		
+	}
+	else { // 24 hour mode
+		hr &= 0x3F; // clear first 2 bits 
+	}
+	
+	i2c_start(DS3231_WRITE); // write
+	i2c_write(0x00); // starting at address of seconds register
+	i2c_write(sec); // increments to next register after every byte
+	i2c_write(min);
+	i2c_write(hr);
+	i2c_stop();	
+	
+}

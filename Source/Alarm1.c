@@ -24,38 +24,63 @@
 #define UP (!(PINA & 0x10)) // Button 3  - SA minute
 #define DOWN (!(PINA & 0x20)) // Button 4 - hourMode / SA hour 
 
-enum DisplayTimeState {DTInit, DTDisplay, DTIdle, DTWaitHrB, DTHrSwap, DTToSA} displayTime_state;
+enum DisplayTimeState {DTInit, DTDisplay, DTIdle, DTWaitHrB, DTHrSwap, DTToST, DTToSA} displayTime_state;
 enum SetAlarmState {SAInit, SAIdle, SASetAla, SADisplay, SAHrInc, SAMinInc, SASaveAla, SAToDT} setAlarm_state;
+enum SetTimeState {STInit, STIdle, STSetTime, STDisplay, STHrInc, STMinInc, STSaveTime, STToDT} setTime_state;
 enum LEDPWMState {LPInit, LPOff, LPOn, LPReset} LEDPWM_state;
 enum AlarmOnState {AOInit, AOCheck, AOSendFlag, AOWaitSignal, AOReset} alarmOn_state;
 enum SpeakerOnState {SInit, SOff, SOn, SReset} speakerOn_state;
 
-/* admin variables
-   These variables determine which SM is displayed */
-unsigned char DTAdmin = 0;
-unsigned char SAAdmin = 0;
+/* 0x01 DTAdmin 
+   0x02 SAAdmin 
+   0x04 STAdmin
+*/
+unsigned char Admin = 0x01; 
 
 unsigned char hourMode = 0; // 0 is 12 hour mode | 1 is 24 hour mode
 uint8_t ampm; // 1 is PM | 0 is AM
 
 /* DS3231 variables */
 uint8_t hr, min, sec, year, mnth, day, dt;
-uint8_t hrdec, mindec, yeardec, mnthdec, daydec, dtdec;
+uint8_t hrdec, mindec, secdec, yeardec, mnthdec, daydec, dtdec;
 
 // The set alarm
 uint8_t alarmSetHour = 0x0F;   
 uint8_t alarmSetMin = 0x0F; 
 unsigned char alarmSetAMPM = 0; 
+unsigned char alarmIsSet = 0; // display on main time time until alarm
 
 uint8_t alarmHour = 12;
 uint8_t alarmMin = 0;
 unsigned char alarmAMPM = 1;
+
+uint8_t timeHour = 12;
+uint8_t timeMin	= 0;
+unsigned timeAMPM = 1;
 
 unsigned char minTimer = 0; // Refreshes display every 60s
 
 unsigned char alarmOnFlag = 0; // If flag == 1, the alarm is on
 unsigned int alarmCheck; // Convert alarm setting to minutes for easier alarm checking
 unsigned int hourSum; // Convert current time to minutes to check against alarm
+/*
+const double G = 392;
+const double A = 440;
+const double F = 349.23;
+const double E = 329.63;
+const double D = 293.67;
+const double C = 261.63;
+*/
+
+int i = 0; // song counter
+double alarmSong[40] = {392, 440, 392, 349.23, 
+						329.63, 349.23, 392, 392, 
+						293.67, 329.63, 349.23, 349.23, 
+						329.63, 349.23, 392, 392,
+						392, 440, 392, 349.23,
+						329.63, 349.23, 392, 392,
+						293.67, 293.67, 392, 392,
+						329.63, 261.63, 261.63, 261.63};
 
 void UpdateTime() {
 	
@@ -70,6 +95,7 @@ void UpdateTime() {
 	else if(hourMode == 1) { // 24 hour
 		hrdec = bcd2dec(hr & 0x3F);
 	}
+	secdec = bcd2dec(sec);
 	mindec = bcd2dec(min);
 	yeardec = bcd2dec(year);
 	mnthdec = bcd2dec(mnth);
@@ -105,6 +131,7 @@ void set_PWM(double frequency) {
 void DisplayTime_Init(){
 	
 	displayTime_state = DTInit;
+	Admin = 0x01; // Start as admin
 	
 }
 
@@ -112,6 +139,11 @@ void SetAlarm_Init() {
 	
 	setAlarm_state = SAInit;
 	
+}
+
+void SetTime_Init() {
+	
+	setTime_state = STInit;
 }
 
 void LEDPWM_Init() {
@@ -135,19 +167,18 @@ void SpeakerOn_Init() {
 	TCCR3B = (1 << WGM32) | (1 << CS31) | (1 << CS30);
 	// WGM32: When counter (TCNT3) matches OCR3A, reset counter
 	// CS31 & CS30: Set a prescaler of 64
-	set_PWM(0);
+	set_PWM(392);
 }
 
 /* Display the current time, day, and date
    Can switch between 12 hour and 24 hour mode 
-   Can give admin to the set alarm state   */
+   Can give admin to the set alarm state and set time state  */
 void DisplayTime_Tick() {
 	
 	// Transitions
 	switch(displayTime_state) {
 		
 		case DTInit:
-			DTAdmin = 1; // Start as admin
 			displayTime_state = DTDisplay; 
 		break;
 		
@@ -159,10 +190,13 @@ void DisplayTime_Tick() {
 			if(LEFT && !(RIGHT || UP || DOWN)) { // Admin to SA
 				displayTime_state = DTToSA;
 			}
-			else if(DOWN && !(LEFT || RIGHT || UP)) { // Change the hour mode
+			else if(DOWN && !(LEFT || RIGHT || UP)) { // change hour mode
 				displayTime_state = DTWaitHrB;
 			}
-			else if(minTimer >= 150) { // Refresh the display after 1 minute
+			else if(RIGHT && !(LEFT || UP || DOWN)) { // Admin to ST
+				displayTime_state = DTToST;
+			}
+			else if(minTimer >= 5) { // Refresh the display after 1 second
 				displayTime_state = DTDisplay; 
 			}
 			else { // Do nothing
@@ -170,24 +204,30 @@ void DisplayTime_Tick() {
 			}
 		break;
 		
-		case DTWaitHrB: // Wait for button to be unpressed
-			if(DOWN) { 
+		case DTWaitHrB:
+			if(DOWN) {
 				displayTime_state = DTWaitHrB;
-			}
-			else if(!DOWN) {
-				displayTime_state = DTHrSwap;
 			}
 			else {
-				displayTime_state = DTWaitHrB;
+				displayTime_state = DTHrSwap;
 			}
 		break;
 		
-		case DTHrSwap: // Change the hour mode
-			displayTime_state = DTDisplay;
+		case DTHrSwap:
+			displayTime_state = DTIdle;
+		break;
+		
+		case DTToST: 
+			if(Admin == 0x01) { // If admin has been returned from ST
+				displayTime_state = DTDisplay;
+			}
+			else {
+				displayTime_state = DTToST;
+			}
 		break;
 		
 		case DTToSA:
-			if(DTAdmin == 1 && SAAdmin == 0) { // If admin has been returned from SA
+			if(Admin == 0x01) { // If admin has been returned from SA
 				displayTime_state = DTDisplay;
 			}
 			else {
@@ -215,13 +255,53 @@ void DisplayTime_Tick() {
 			SLCD_WriteData(3, ':');
 			SLCD_WriteData(4, (mindec / 10) + '0'); 
 			SLCD_WriteData(5, (mindec % 10) + '0'); 
+			SLCD_WriteData(6, ':');
+			SLCD_WriteData(7, (secdec / 10) + '0');
+			SLCD_WriteData(8, (secdec % 10) + '0');
 			if((hourMode == 0) && (ampm == 1)) {
-				LCD_DisplayString(6, "PM");
+				LCD_DisplayString(9, "PM");
 			}
 			else if((hourMode == 0) && (ampm == 0)){
-				LCD_DisplayString(6, "AM");
+				LCD_DisplayString(9, "AM");
 			}
-			SLCD_WriteData(17, (mnthdec / 10) + '0'); // Display date
+			if(alarmIsSet) {
+				LCD_DisplayString(17, "Alarm ");
+				if(hourMode == 0) {
+					if(alarmSetHour >= 13) {
+						SLCD_WriteData(23, ((alarmSetHour - 12) / 10) + '0');
+						SLCD_WriteData(24, ((alarmSetHour - 12) % 10) + '0');
+					}
+					else {
+						SLCD_WriteData(23, (alarmSetHour / 10) + '0');
+						SLCD_WriteData(24, (alarmSetHour % 10) + '0');
+					}
+					SLCD_WriteData(25, ':');
+					SLCD_WriteData(26, (alarmSetMin / 10) + '0');
+					SLCD_WriteData(27, (alarmSetMin % 10) + '0');
+					if(alarmSetAMPM) {
+						LCD_DisplayString(28, "PM");
+					}
+					else {
+						LCD_DisplayString(28, "AM");
+					}
+				}
+				else {
+					if(alarmSetAMPM) {
+						SLCD_WriteData(23, ((alarmSetHour + 12) / 10) + '0');
+						SLCD_WriteData(24, ((alarmSetHour + 12) % 10) + '0');					
+					}
+					else {
+						SLCD_WriteData(23, (alarmSetHour / 10) + '0');
+						SLCD_WriteData(24, (alarmSetHour % 10) + '0');						
+					}
+
+					SLCD_WriteData(25, ':');
+					SLCD_WriteData(26, (alarmSetMin / 10) + '0');
+					SLCD_WriteData(27, (alarmSetMin % 10) + '0');					
+				}
+			}
+			/* DISPLAY DATE FUNCTIONALITY
+			SLCD_WriteData(17, (mnthdec / 10) + '0');
 			SLCD_WriteData(18, (mnthdec % 10) + '0'); 
 			SLCD_WriteData(19, '/');
 			SLCD_WriteData(20, (dtdec / 10) + '0');
@@ -254,14 +334,15 @@ void DisplayTime_Tick() {
 				default:
 					LCD_DisplayString(28, "broke");
 				break;
-			}			
+			}
+			*/			
 		break;
 		
 		case DTIdle: // Wait for a button press
 			minTimer++;
 		break;
 		
-		case DTWaitHrB: // Wait for the hour button unpress
+		case DTWaitHrB:
 			minTimer++;
 		break;
 		
@@ -270,32 +351,35 @@ void DisplayTime_Tick() {
 			if(hourMode == 0) { // 12 to 24
 				hourMode = 1;
 				ds3231_setHr(hourMode, hr);
-				/*
 				if(alarmSetHour > 12) {
 					alarmSetHour -= 12;
 				}
-				*/
 			}
 			else if(hourMode == 1) { 
 				hourMode = 0;
 				ds3231_setHr(hourMode, hr);
-				/*
 				if(alarmSetAMPM) {
 					alarmSetHour += 12;
 				}
-				*/
 			}
 		break;	
+				
+		case DTToST: // Give admin to ST
+			if(Admin == 0x01) {
+				Admin = 0x04;
+			}
+			minTimer++;
+		break;
 		
 		case DTToSA: // Give admin to SA
-			if(DTAdmin == 1) {
-				DTAdmin = 0;
-				SAAdmin = 1;
+			if(Admin == 0x01) {
+				Admin = 0x02;
 			}
+			minTimer++;
 		break;
 		
 		default:
-			DTAdmin = 1;
+			Admin = 0x01;
 		break;
 	}
 		
@@ -317,10 +401,10 @@ void SetAlarm_Tick() {
 		break;
 		
 		case SAIdle: // Wait for admin
-			if(SAAdmin == 0) {
+			if(Admin != 0x02) {
 				setAlarm_state = SAIdle;
 			}
-			else if(SAAdmin == 1 && !LEFT) { // Button unpressed
+			else if(Admin == 0x02 && !LEFT)	{ // Button unpressed
 				setAlarm_state = SADisplay;
 			}
 		break;
@@ -349,7 +433,7 @@ void SetAlarm_Tick() {
 		break;
 		
 		case SAToDT: // Return admin to DT
-			setAlarm_state = SAInit;
+			setAlarm_state = SAIdle;
 		break;
 		
 		case SAMinInc: // Inc minutes
@@ -429,15 +513,15 @@ void SetAlarm_Tick() {
 			alarmSetHour = alarmHour;
 			alarmSetMin = alarmMin;
 			alarmSetAMPM = alarmAMPM;
+			alarmIsSet = 1;
 		break;
 		
 		case SAToDT:
 			alarmHour = 12; // Reset Set Alarm variables
 			alarmMin = 0;
 			alarmAMPM = 1;
-			if(SAAdmin == 1) {
-				SAAdmin = 0;
-				DTAdmin = 1;
+			if(Admin == 0x02) {
+				Admin = 0x01;
 			}
 		break;
 		
@@ -445,6 +529,156 @@ void SetAlarm_Tick() {
 		break;
 	}
 }
+
+/* Display a time to be set
+   Button 1 - Set Time displayed
+   Button 2 - Cancel
+   Button 3 - Increase minute
+   Button 4 - Increase hour
+*/
+void SetTime_Tick() {
+	
+// Transitions
+	switch(setTime_state) {
+	
+		case STInit:
+			setTime_state = STIdle;
+		break;
+	
+		case STIdle: // Wait for admin
+			if(Admin != 0x04) {
+				setTime_state = STIdle;
+			}
+			else if(Admin == 0x04 && !DOWN)	{ // Button unpressed
+			setTime_state = STDisplay;
+			}
+		break;
+	
+		case STDisplay: // Output current time setting time
+			setTime_state = STSetTime;
+		break;
+	
+		case STSetTime: // Wait for button inputs
+			if(LEFT && !(RIGHT || UP || DOWN)) { // Save time
+				setTime_state = STSaveTime;
+			}
+			else if(RIGHT && !(LEFT || UP || DOWN)) { // Cancel time
+				setTime_state = STToDT;
+			}
+			else if(UP && !(LEFT || RIGHT || DOWN)) { // Increase minutes
+				setTime_state = STMinInc;
+			}
+			else if(DOWN && !(LEFT || RIGHT || UP)) { // Increase hours
+				setTime_state = STHrInc;
+			}
+		break;
+	
+		case STSaveTime: // Save time
+			setTime_state = STToDT;
+		break;
+	
+		case STToDT: // Return admin to DT
+			setTime_state = STIdle;
+		break;
+	
+		case STMinInc: // Inc minutes
+			setTime_state = STDisplay;
+		break;
+	
+		case STHrInc: // Inc hours
+			setTime_state = STDisplay;
+		break;
+	
+		default:
+			setTime_state = STInit;
+		break;
+		
+	}	
+	
+	// Actions
+	switch(setTime_state) {
+	
+		case STInit:
+		break;
+		
+		case STIdle: // wait for admin
+		break;
+		
+		case STDisplay: // display current set time
+			LCD_ClearScreen();
+			LCD_DisplayString(1, "Set Time");
+			if(hourMode == 0 && timeHour >= 13) {
+				SLCD_WriteData(17,((timeHour - 12) / 10) + '0'); // Display time
+				SLCD_WriteData(18, ((timeHour - 12) % 10) + '0');
+			}
+			else {
+				SLCD_WriteData(17,(timeHour / 10) + '0'); // Display time
+				SLCD_WriteData(18, (timeHour % 10) + '0');
+			}
+			SLCD_WriteData(19, ':');
+			SLCD_WriteData(20, (timeMin / 10) + '0');
+			SLCD_WriteData(21, (timeMin % 10) + '0');
+			if((hourMode == 0) && (timeAMPM == 1)) {
+				LCD_DisplayString(22, "PM");
+			}
+			else if((hourMode == 0) && (timeAMPM == 0)){
+				LCD_DisplayString(22, "AM");
+			}
+		break;
+		
+		case STSetTime: // wait for input
+		break;
+		
+		case STSaveTime: // call set time function from ds32131.h
+			if(hourMode == 0 && timeHour >= 13) {
+				timeHour -= 12;
+			}
+			timeHour = dec2bcd(timeHour);
+			timeMin = dec2bcd(timeMin);
+			ds3231_setTime(timeHour, timeMin, 0, timeAMPM, hourMode);
+		break;
+		
+		case STToDT:
+			timeHour = 12; // Reset Set time variables
+			timeMin = 0;
+			timeAMPM = 1;
+			if(Admin == 0x04) {
+				Admin = 0x01;
+			}
+		break;
+		
+		case STMinInc:
+			timeMin++;
+			if(timeMin >= 60) {
+				timeMin = 0;
+			}
+		break;
+		
+		case STHrInc:
+			timeHour++;
+			if(hourMode == 0) { // 12 hour mode settings
+				if(timeHour > 24) {
+					timeHour = 1;
+				}
+				if(timeHour >= 12 && timeHour < 24) {
+					timeAMPM = 1;
+				}
+				else {
+					timeAMPM = 0;
+				}
+				
+			}
+			else if(hourMode == 1 && timeHour >= 24) { // 24 hour mode settings
+				timeHour = 0;
+			}
+		break;
+		
+		default:
+			setTime_state = STInit;
+		break;	
+	}
+	
+};
 
 // Turns light on and off
 void LEDPWM_Tick() {
@@ -550,9 +784,10 @@ void AlarmOn_Tick() {
 			if(USART_HasReceived(0)) {
 				alarmOffSignal = USART_Receive(0);
 				USART_Flush(0);
-			}
-			if(alarmOffSignal) {
-				alarmOn_state = AOReset;
+				//alarmOn_state = AOReset;	
+				if(alarmOffSignal) {
+					alarmOn_state = AOReset;
+				}
 			}
 			else {
 				alarmOn_state = AOWaitSignal;
@@ -591,6 +826,7 @@ void AlarmOn_Tick() {
 			alarmSetMin = 0x0F;
 			alarmSetAMPM = 0;
 			alarmOnFlag = 0;
+			alarmIsSet = 0;
 			alarmOffSignal = 0;		
 		break;
 		
@@ -609,6 +845,7 @@ void SpeakerOn_Tick() {
 		break;
 		
 		case SOff:
+			
 			if((hourMode == 0) && (alarmSetHour == 24 || ((ampm == 1) && (hrdec < 12)))) { // 12 hour mode at midnight or after 1pm
 				hourSum = (hrdec * 60) + mindec + 720;
 			}
@@ -619,6 +856,7 @@ void SpeakerOn_Tick() {
 				hourSum = (hrdec * 60) + mindec;
 			}
 			alarmCheck = (alarmSetHour * 60) + alarmSetMin;
+			
 			if(alarmCheck == hourSum) { // Turn "on" alarm on alarm time
 				speakerOn_state = SOn;
 			}
@@ -650,7 +888,6 @@ void SpeakerOn_Tick() {
 	switch(speakerOn_state) {
 	
 		case SInit:
-			set_PWM(0);
 		break;
 		
 		case SOff:
@@ -658,7 +895,13 @@ void SpeakerOn_Tick() {
 		break;
 		
 		case SOn:
-			set_PWM(293.66);
+			set_PWM(alarmSong[i]);
+			if(i >= 40) {
+				i = 0;
+			}
+			else {
+				i++;
+			}
 		break;
 		
 		case SReset:
@@ -689,6 +932,15 @@ void SetAlarmTask() {
 	}
 }
 
+void SetTimeTask() {
+	
+	SetTime_Init();
+	for(;;) {
+		SetTime_Tick();
+		vTaskDelay(50);
+	}
+}
+
 void LEDPWMTask() {
 	
 	LEDPWM_Init();
@@ -712,7 +964,7 @@ void SpeakerOnTask() {
 	SpeakerOn_Init();
 	for(;;) {
 		SpeakerOn_Tick();
-		vTaskDelay(1000);
+		vTaskDelay(500);
 	}	
 }
 
@@ -720,6 +972,7 @@ void StartSecPulse(unsigned portBASE_TYPE Priority) {
 	
 	xTaskCreate(DisplayTimeTask, (signed portCHAR *)"DisplayTimeTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 	xTaskCreate(SetAlarmTask, (signed portCHAR *)"SetAlarmTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
+	xTaskCreate(SetTimeTask, (signed portCHAR *)"SetTimeTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 	xTaskCreate(LEDPWMTask, (signed portCHAR *)"LEDPWMTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);	
 	xTaskCreate(AlarmOnTask, (signed portCHAR *)"AlarmOnTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
 	xTaskCreate(SpeakerOnTask, (signed portCHAR *)"SpeakerOnTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL);
@@ -730,7 +983,7 @@ int main(void) {
 	DDRA = 0x00; PORTA = 0xFF;
 	DDRB = 0xFF; PORTB = 0x00;
 	DDRD = 0xFE; PORTD = 0x01;
-	DDRC = 0xC0; PORTC = 0x3F;
+	DDRC = 0xEC; PORTC = 0x13;
 
 	LCD_init();
 	ds3231_init();	

@@ -14,9 +14,9 @@
 /*-------------------------------------------------------------------------*/
 
 //#define DATA_BUS PORTD		// port connected to pins 7-14 of LCD display
-#define CONTROL_BUS PORTD	// port connected to pins 4 and 6 of LCD disp.
-#define RS 6			// pin number of uC connected to pin 4 of LCD disp.
-#define E 5				// pin number of uC connected to pin 6 of LCD disp.
+#define CONTROL_BUS PORTC // port connected to pins 4 and 6 of LCD disp.
+#define RS 2			// pin number of uC connected to pin 4 of LCD disp.
+#define E 3				// pin number of uC connected to pin 6 of LCD disp.
 
 /*-------------------------------------------------------------------------*/
 
@@ -49,8 +49,8 @@ void transmit_data(unsigned char data) {
 		data = data << 1;
 	}
 	PORTD |= 0x04; // Set RCLK = 1. Rising edge copies data from the "Shift" register to the "Storage" register
-	PORTD &= 0xE3; // Clears all lines in preparation of a new transmission
-	PORTC &= 0x3F;
+	PORTD &= 0xF3; // Clears all lines in preparation of a new transmission
+	PORTC &= 0x1F;
 }
 
 void LCD_WriteCommand (unsigned char Command) {
