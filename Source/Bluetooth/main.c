@@ -48,10 +48,11 @@ void AlarmOff_Tick(){
 			if(USART_HasReceived(0)) { // check if the alarm is on
 				alarmOn = USART_Receive(0);
 				USART_Flush(0);
-			}
-			if(alarmOn) { 
-				alarmOff_state = AOWaitFSR;	
-				alarmOn = 0;
+				//alarmOff_state = AOWaitFSR;
+				if(alarmOn) {
+					alarmOn = 0;
+					alarmOff_state = AOWaitFSR;
+				}
 			}
 			else {
 				alarmOff_state = AOWaitAlarm;	
@@ -107,7 +108,7 @@ void AlarmOff_Tick(){
 		
 		case AOWaitFSR:
 			threeSecCount = 0;
-			PORTB = 0xF0;
+			PORTB = 0x00;
 		break;
 		
 		case AOPress:
@@ -117,9 +118,9 @@ void AlarmOff_Tick(){
 		
 		case AOOff:
 			threeSecCount = 0;
-			PORTB = 0xFF;
 			if(USART_IsSendReady(0)) { // Send off signal through USART
 				USART_Send(0x01, 0);
+				PORTB = 0xFF;
 			}			
 		break;
 		
